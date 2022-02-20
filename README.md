@@ -1,4 +1,4 @@
-# airflow_snowflake_s3
+# Airflow-Snowflake-S3 with Slack Alerts
 This shows how to use Airflow with Snowflake and S3
 
 I first upload the data from this Kaggle dataset: https://www.kaggle.com/megelon/meetup to Snowflake.
