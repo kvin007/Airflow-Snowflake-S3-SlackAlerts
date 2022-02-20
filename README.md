@@ -1,5 +1,5 @@
 # Airflow-Snowflake-S3 with Slack Alerts
-This shows how to use Airflow with Snowflake and S3
+This shows how to use Airflow with Snowflake and S3. Also sending Slack Alerts in case a task fails
 
 I first upload the data from this Kaggle dataset: https://www.kaggle.com/megelon/meetup to Snowflake.
 If you don't have an account, you can create a free one.
