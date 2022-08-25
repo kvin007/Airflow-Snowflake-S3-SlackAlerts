@@ -15,7 +15,7 @@ from src.helpers.dag_helper import get_dag_default_args
 from src.helpers.aws_s3_helper import AWSS3Helper
 
 from airflow import DAG
-from airflow.decorators import task
+from airflow.decorators import task, branch_task
 from airflow.operators.python import BranchPythonOperator
 from airflow.utils.dates import days_ago
 from airflow.utils.edgemodifier import Label
@@ -24,18 +24,13 @@ from airflow.utils.edgemodifier import Label
 SNOWFLAKE_CONN_ID = 'snowflake_conn_id'
 AWS_S3_CONN_ID = 'aws_s3_conn_id'
 DAYS_BACK_IN_TIME = 10 * 365
-DEFAULT_BUCKET_NAME = 'kevin-test-bucket'
+DEFAULT_BUCKET_NAME = 'my-airflow-bucket-kvinp007'
 snowflake_helper = SnowflakeHelper(SNOWFLAKE_CONN_ID)
 
 def get_previous_day_for_processing() -> str:
     time_zone = pytz.timezone('UTC') # Just as a test
     previous_day = datetime.strftime(datetime.now(time_zone) - timedelta(days=DAYS_BACK_IN_TIME),'%Y-%m-%d')
     return previous_day
-
-def switch_create_or_insert_directly(**kwargs) -> str:
-    ti = kwargs['ti']
-    xcom_value = ti.xcom_pull(task_ids='verify_destination_created')
-    return 'insert_members_joined' if xcom_value['is_created'] else 'create_daily_joined_table'
 
 
 with DAG(
@@ -63,15 +58,16 @@ with DAG(
             "is_created": result == 1
         }
 
-    check_need_table = BranchPythonOperator(
-        task_id='check_need_to_create',
-        python_callable=switch_create_or_insert_directly,
-        provide_context=True)
+    @branch_task(provide_context=True)
+    def check_need_table(**kwargs) -> str:
+        ti = kwargs['ti']
+        xcom_value = ti.xcom_pull(task_ids='verify_destination_created')
+        return 'insert_members_joined' if xcom_value['is_created'] else 'create_daily_joined_table'
 
     @task()
     def create_daily_joined_table() -> None:
         create_statement = """
-        CREATE OR REPLACE TABLE DB.MEETUP.daily_joined(
+        CREATE OR REPLACE TABLE YOUR_DATABASE.MEETUP.daily_joined(
             date_group     text,
             joined_date    date,
             group_id       bigint,
@@ -87,20 +83,20 @@ with DAG(
         previous_day = get_previous_day_for_processing()
         
         merge_statement = """
-        MERGE INTO DB.MEETUP.daily_joined
+        MERGE INTO YOUR_DATABASE.MEETUP.daily_joined
         USING
         (SELECT CONCAT(TO_VARCHAR(TO_DATE(aux.joined_date)),'_',TO_VARCHAR(aux.group_id)) as date_group, aux.*
             FROM
             (
                 SELECT TO_DATE(m.joined) as joined_date, m.group_id, g.group_name, count(*) as members_joined
-                FROM DB.MEETUP.members m
-                INNER JOIN DB.MEETUP.groups g
+                FROM YOUR_DATABASE.MEETUP.members m
+                INNER JOIN YOUR_DATABASE.MEETUP.groups g
                 ON m.group_id = g.group_id
                 WHERE TO_DATE(m.joined) = TO_DATE(""" + "'" + previous_day + "'" + """)
                 GROUP BY TO_DATE(m.joined), m.group_id, g.group_name
             ) as aux
         ) as src
-        ON DB.MEETUP.daily_joined.date_group = src.date_group
+        ON YOUR_DATABASE.MEETUP.daily_joined.date_group = src.date_group
         WHEN NOT MATCHED THEN
         INSERT (date_group,joined_date,group_id,group_name, members_joined) VALUES (src.date_group,src.joined_date,src.group_id,src.group_name,src.members_joined)
         """
@@ -111,7 +107,7 @@ with DAG(
     def upload_to_aws_s3_bucket() -> None:
         # I just consider 100 since this is for testing purposes
         current_day_members = """
-            SELECT * FROM DB.MEETUP.daily_joined LIMIT 100;
+            SELECT * FROM YOUR_DATABASE.MEETUP.daily_joined LIMIT 100;
         """
         previous_day = get_previous_day_for_processing()
         result, cursor = snowflake_helper.execute_sql(current_day_members, with_cursor=True)
@@ -135,10 +131,11 @@ with DAG(
 
     
     verify_destination = verify_destination_created()
+    check_table = check_need_table()
     create_destination = create_daily_joined_table()
     insert_data = insert_members_joined()
     upload_s3 = upload_to_aws_s3_bucket()
 
-    verify_destination >> check_need_table
-    check_need_table >> Label("Destination does not exist") >> create_destination >> insert_data >> upload_s3
-    check_need_table >> Label("Insert data") >> insert_data >> upload_s3
+    verify_destination >> check_table
+    check_table >> Label("Destination does not exist") >> create_destination >> insert_data >> upload_s3
+    check_table >> Label("Insert data") >> insert_data >> upload_s3

@@ -1,4 +1,4 @@
-FROM apache/airflow:2.2.3-python3.9
+FROM apache/airflow:2.3.4-python3.9
 
 # Airflow
 ARG AIRFLOW_USER_HOME=/opt/airflow
